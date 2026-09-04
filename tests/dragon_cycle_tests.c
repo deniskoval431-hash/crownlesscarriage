@@ -68,8 +68,19 @@ int main(void)
     for (int32_t i = 0; i < sim.settlement_count; ++i) {
         sim.settlements[i].prosperity = 40;
     }
+    /* The refectory events shift the world's random stream; make the
+       tribute target unambiguous rather than relying on exact draws. */
+    for (int32_t s2 = 0; s2 < sim.settlement_count; ++s2) {
+        sim.settlements[s2].prosperity = 10;
+        sim.settlements[s2].market_coins = 0;
+        sim.settlements[s2].stock[CC_GOOD_GOLD] = 0;
+        sim.settlements[s2].stock[CC_GOOD_GEMS] = 0;
+    }
     CcSettlement *rich = &sim.settlements[4];
     rich->prosperity = 100;
+    rich->market_coins = 900;
+    rich->stock[CC_GOOD_GOLD] = 5;
+
     for (int32_t i = 0; i < sim.kingdom_count; ++i) {
         sim.kingdoms[i].treasury = 300;
         sim.kingdoms[i].legitimacy = 80;

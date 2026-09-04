@@ -9,7 +9,7 @@
 #include <string.h>
 
 #define CC_SQLITE_APPLICATION_ID 1128481362
-#define CC_SQLITE_USER_VERSION 20
+#define CC_SQLITE_USER_VERSION 21
 #define CC_JOURNAL_RECORD_VERSION 1
 #define CC_JOURNAL_RUNTIME_FLUSH_TICKS 6
 #define CC_JOURNAL_MAX_DAY_ADVANCE 3650
@@ -136,6 +136,30 @@ static bool EnsureRealmColumns(sqlite3 *database,
 {
     return EnsureColumn(database, "kingdom", "iron_ledger_debt",
             "ALTER TABLE kingdom ADD COLUMN iron_ledger_debt INTEGER NOT NULL DEFAULT 0;",
+            error, error_capacity) &&
+        EnsureColumn(database, "kingdom", "monastery_sanction",
+            "ALTER TABLE kingdom ADD COLUMN monastery_sanction INTEGER NOT NULL DEFAULT 0;",
+            error, error_capacity) &&
+        EnsureColumn(database, "kingdom", "unsanctioned_weeks",
+            "ALTER TABLE kingdom ADD COLUMN unsanctioned_weeks INTEGER NOT NULL DEFAULT 0;",
+            error, error_capacity) &&
+        EnsureColumn(database, "kingdom", "anointed",
+            "ALTER TABLE kingdom ADD COLUMN anointed INTEGER NOT NULL DEFAULT 0;",
+            error, error_capacity) &&
+        EnsureColumn(database, "material_economy", "paper_stock",
+            "ALTER TABLE material_economy ADD COLUMN paper_stock INTEGER NOT NULL DEFAULT 0;",
+            error, error_capacity) &&
+        EnsureColumn(database, "material_economy", "paper_target",
+            "ALTER TABLE material_economy ADD COLUMN paper_target INTEGER NOT NULL DEFAULT 0;",
+            error, error_capacity) &&
+        EnsureColumn(database, "material_economy", "paper_production",
+            "ALTER TABLE material_economy ADD COLUMN paper_production INTEGER NOT NULL DEFAULT 0;",
+            error, error_capacity) &&
+        EnsureColumn(database, "material_economy", "paper_consumption",
+            "ALTER TABLE material_economy ADD COLUMN paper_consumption INTEGER NOT NULL DEFAULT 0;",
+            error, error_capacity) &&
+        EnsureColumn(database, "material_economy", "paper_price",
+            "ALTER TABLE material_economy ADD COLUMN paper_price INTEGER NOT NULL DEFAULT 0;",
             error, error_capacity) &&
         EnsureColumn(database, "settlement", "size",
             "ALTER TABLE settlement ADD COLUMN size INTEGER NOT NULL DEFAULT 0;",
@@ -745,7 +769,10 @@ static bool CreateSchema(sqlite3 *database, char *error, size_t error_capacity)
         " slot INTEGER PRIMARY KEY, id INTEGER NOT NULL UNIQUE, name TEXT NOT NULL,"
         " color_r INTEGER NOT NULL, color_g INTEGER NOT NULL, color_b INTEGER NOT NULL,"
         " treasury INTEGER NOT NULL, legitimacy INTEGER NOT NULL,"
-        " iron_ledger_debt INTEGER NOT NULL DEFAULT 0);"
+        " iron_ledger_debt INTEGER NOT NULL DEFAULT 0,"
+        " monastery_sanction INTEGER NOT NULL DEFAULT 0,"
+        " unsanctioned_weeks INTEGER NOT NULL DEFAULT 0,"
+        " anointed INTEGER NOT NULL DEFAULT 0);"
         "CREATE TABLE IF NOT EXISTS route ("
         " slot INTEGER PRIMARY KEY, id INTEGER NOT NULL UNIQUE, from_id INTEGER NOT NULL,"
         " to_id INTEGER NOT NULL, travel_days INTEGER NOT NULL, capacity INTEGER NOT NULL,"
@@ -1018,12 +1045,15 @@ static bool CreateSchema(sqlite3 *database, char *error, size_t error_capacity)
         "CREATE TABLE IF NOT EXISTS material_economy ("
         " slot INTEGER PRIMARY KEY, weapons_stock INTEGER NOT NULL,"
         " gold_stock INTEGER NOT NULL, gems_stock INTEGER NOT NULL,"
+        " paper_stock INTEGER NOT NULL DEFAULT 0,"
         " weapons_target INTEGER NOT NULL, gold_target INTEGER NOT NULL,"
-        " gems_target INTEGER NOT NULL, weapons_production INTEGER NOT NULL,"
-        " gold_production INTEGER NOT NULL, gems_production INTEGER NOT NULL,"
+        " gems_target INTEGER NOT NULL, paper_target INTEGER NOT NULL DEFAULT 0,"
+        " weapons_production INTEGER NOT NULL, gold_production INTEGER NOT NULL,"
+        " gems_production INTEGER NOT NULL, paper_production INTEGER NOT NULL DEFAULT 0,"
         " weapons_consumption INTEGER NOT NULL, gold_consumption INTEGER NOT NULL,"
-        " gems_consumption INTEGER NOT NULL, weapons_price INTEGER NOT NULL,"
-        " gold_price INTEGER NOT NULL, gems_price INTEGER NOT NULL,"
+        " gems_consumption INTEGER NOT NULL, paper_consumption INTEGER NOT NULL DEFAULT 0,"
+        " weapons_price INTEGER NOT NULL, gold_price INTEGER NOT NULL,"
+        " gems_price INTEGER NOT NULL, paper_price INTEGER NOT NULL DEFAULT 0,"
         " field_yield INTEGER NOT NULL, iron_deposit INTEGER NOT NULL,"
         " gold_seam INTEGER NOT NULL, gem_seam INTEGER NOT NULL,"
         " gold_progress INTEGER NOT NULL, gem_progress INTEGER NOT NULL,"
@@ -1182,7 +1212,8 @@ static bool SaveKingdoms(sqlite3 *database, const CcSim *sim,
     if (!Prepare(database,
                  "INSERT INTO kingdom "
                  "(slot,id,name,color_r,color_g,color_b,treasury,legitimacy,"
-                 "iron_ledger_debt) VALUES(?,?,?,?,?,?,?,?,?);",
+                 "iron_ledger_debt,monastery_sanction,unsanctioned_weeks,"
+                 "anointed) VALUES(?,?,?,?,?,?,?,?,?,?,?,?);",
                  &statement, error, error_capacity)) return false;
     for (int32_t i = 0; i < sim->kingdom_count; ++i) {
         const CcKingdom *item = &sim->kingdoms[i];
@@ -1191,6 +1222,9 @@ static bool SaveKingdoms(sqlite3 *database, const CcSim *sim,
         BindInt(statement, 5, item->color_g); BindInt(statement, 6, item->color_b);
         BindMoney(statement, 7, item->treasury); BindInt(statement, 8, item->legitimacy);
         BindMoney(statement, 9, item->iron_ledger_debt);
+        BindInt(statement, 10, item->monastery_sanction);
+        BindInt(statement, 11, item->unsanctioned_weeks);
+        BindInt(statement, 12, item->anointed ? 1 : 0);
         if (!StepDone(database, statement, error, error_capacity) ||
             !ResetStatement(database, statement, error, error_capacity)) {
             sqlite3_finalize(statement); return false;
@@ -1326,7 +1360,7 @@ static bool SaveMaterialEconomy(sqlite3 *database, const CcSim *sim,
 {
     sqlite3_stmt *statement = NULL;
     if (!Prepare(database,
-            "INSERT INTO material_economy VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);",
+            "INSERT INTO material_economy VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);",
             &statement, error, error_capacity)) return false;
     for (int32_t i = 0; i < sim->settlement_count; ++i) {
         const CcSettlement *s = &sim->settlements[i];
@@ -1386,10 +1420,10 @@ static bool SaveMaterialEconomy(sqlite3 *database, const CcSim *sim,
     BindInt(statement, column++, (int32_t)sim->goblins.raid_motive);
     BindMoney(statement, column++, sim->goblins.lair_coins);
     BindId(statement, column++, sim->goblins.carried_treasure_id);
-    for (int32_t good = 0; good < CC_GOOD_COUNT; ++good) {
+    for (int32_t good = 0; good <= CC_GOOD_GEMS; ++good) {
         BindInt(statement, column++, sim->goblins.carried_goods[good]);
     }
-    for (int32_t good = 0; good < CC_GOOD_COUNT; ++good) {
+    for (int32_t good = 0; good <= CC_GOOD_GEMS; ++good) {
         BindInt(statement, column++, sim->goblins.lair_stock[good]);
     }
     result = StepDone(database, statement, error, error_capacity);
@@ -1400,7 +1434,7 @@ static bool SaveMaterialEconomy(sqlite3 *database, const CcSim *sim,
             "INSERT INTO dragon_material_economy VALUES(1,?,?,?,?,?,?,?);",
             &statement, error, error_capacity)) return false;
     BindId(statement, 1, sim->dragon.stolen_treasure_id);
-    for (int32_t good = 0; good < CC_GOOD_COUNT; ++good) {
+    for (int32_t good = 0; good <= CC_GOOD_GEMS; ++good) {
         BindInt(statement, good + 2, sim->dragon.hoard_goods[good]);
     }
     result = StepDone(database, statement, error, error_capacity);
@@ -1863,7 +1897,7 @@ static bool SaveLegends(sqlite3 *database, const CcSim *sim,
         BindId(statement, column++, campaign->cause_event_id);
         BindInt(statement, column++, campaign->days_remaining);
         BindInt(statement, column++, campaign->cooldown_days);
-        for (int32_t good = 0; good < CC_GOOD_COUNT; ++good) {
+        for (int32_t good = 0; good <= CC_GOOD_GEMS; ++good) {
             BindInt(statement, column++, campaign->supplies[good]);
         }
         BindMoney(statement, column++, campaign->recovered_coins);
@@ -2563,10 +2597,21 @@ static bool ReadKingdoms(sqlite3 *database, CcSim *sim,
                          char *error, size_t error_capacity)
 {
     sqlite3_stmt *statement = NULL;
-    if (!Prepare(database,
+    bool has_sanction = false;
+    if (!ColumnExists(database, "kingdom", "monastery_sanction",
+                      &has_sanction, error, error_capacity)) return false;
+    if (has_sanction) {
+        if (!Prepare(database,
+                 "SELECT slot,id,name,color_r,color_g,color_b,treasury,"
+                 "legitimacy,iron_ledger_debt,monastery_sanction,"
+                 "unsanctioned_weeks,anointed FROM kingdom ORDER BY slot;",
+                 &statement, error, error_capacity)) return false;
+    } else {
+        if (!Prepare(database,
                  "SELECT slot,id,name,color_r,color_g,color_b,treasury,"
                  "legitimacy,iron_ledger_debt FROM kingdom ORDER BY slot;",
                  &statement, error, error_capacity)) return false;
+    }
     int32_t rows = 0;
     while (sqlite3_step(statement) == SQLITE_ROW) {
         int32_t slot = sqlite3_column_int(statement, 0);
@@ -2585,6 +2630,17 @@ static bool ReadKingdoms(sqlite3 *database, CcSim *sim,
         k->legitimacy = sqlite3_column_int(statement, 7);
         k->iron_ledger_debt =
             (CcMoney)sqlite3_column_int64(statement, 8);
+        if (has_sanction) {
+            k->monastery_sanction = sqlite3_column_int(statement, 9);
+            k->unsanctioned_weeks = sqlite3_column_int(statement, 10);
+            k->anointed = sqlite3_column_int(statement, 11) != 0;
+        } else {
+            /* Legacy v22 save: sanction starts neutral and the abbey's word
+               must be earned from the first refectory meal onward. */
+            k->monastery_sanction = k->legitimacy;
+            k->unsanctioned_weeks = 0;
+            k->anointed = k->legitimacy >= 60;
+        }
         rows += 1;
     }
     sqlite3_finalize(statement);
@@ -2824,10 +2880,41 @@ static bool ReadMaterialEconomy(sqlite3 *database, CcSim *sim,
                                 char *error, size_t error_capacity)
 {
     if (sim->schema_version < 9U) return true;
+    /* Legacy v22 databases lack the paper columns (read-only opens cannot
+       migrate). Detect and read them with the pre-paper projection: the
+       scriptorium starts with no paper and the mills must earn it. */
+    bool has_paper = false;
+    if (!ColumnExists(database, "material_economy", "paper_stock",
+                      &has_paper, error, error_capacity)) return false;
     sqlite3_stmt *statement = NULL;
-    if (!Prepare(database,
-            "SELECT * FROM material_economy ORDER BY slot;",
+    if (has_paper) {
+        if (!Prepare(database,
+            "SELECT slot, weapons_stock, gold_stock, gems_stock, paper_stock,"
+            " weapons_target, gold_target, gems_target, paper_target,"
+            " weapons_production, gold_production, gems_production,"
+            " paper_production, weapons_consumption, gold_consumption,"
+            " gems_consumption, paper_consumption, weapons_price,"
+            " gold_price, gems_price, paper_price, field_yield,"
+            " iron_deposit, gold_seam, gem_seam, gold_progress,"
+            " gem_progress, farm_tool_wear, mine_tool_wear,"
+            " smith_tool_wear, treasure_gold_committed,"
+            " treasure_gems_committed, treasure_work"
+            " FROM material_economy ORDER BY slot;",
             &statement, error, error_capacity)) return false;
+    } else {
+        if (!Prepare(database,
+            "SELECT slot, weapons_stock, gold_stock, gems_stock,"
+            " weapons_target, gold_target, gems_target,"
+            " weapons_production, gold_production, gems_production,"
+            " weapons_consumption, gold_consumption, gems_consumption,"
+            " weapons_price, gold_price, gems_price, field_yield,"
+            " iron_deposit, gold_seam, gem_seam, gold_progress,"
+            " gem_progress, farm_tool_wear, mine_tool_wear,"
+            " smith_tool_wear, treasure_gold_committed,"
+            " treasure_gems_committed, treasure_work"
+            " FROM material_economy ORDER BY slot;",
+            &statement, error, error_capacity)) return false;
+    }
     int32_t rows = 0;
     while (sqlite3_step(statement) == SQLITE_ROW) {
         int32_t slot = sqlite3_column_int(statement, 0);
@@ -2838,19 +2925,26 @@ static bool ReadMaterialEconomy(sqlite3 *database, CcSim *sim,
         }
         CcSettlement *s = &sim->settlements[slot];
         int column = 1;
-        for (int32_t good = CC_GOOD_WEAPONS; good < CC_GOOD_COUNT; ++good) {
+        int32_t last_good = has_paper ? CC_GOOD_PAPER : CC_GOOD_GEMS;
+        if (!has_paper) {
+            /* Legacy restore: paper enters the economy at its base price
+               with empty stock — the mills must earn the archive's ink. */
+            s->stock[CC_GOOD_PAPER] = 0;
+            s->price[CC_GOOD_PAPER] = 9;
+        }
+        for (int32_t good = CC_GOOD_WEAPONS; good <= last_good; ++good) {
             s->stock[good] = sqlite3_column_int(statement, column++);
         }
-        for (int32_t good = CC_GOOD_WEAPONS; good < CC_GOOD_COUNT; ++good) {
+        for (int32_t good = CC_GOOD_WEAPONS; good <= last_good; ++good) {
             s->reserve_target[good] = sqlite3_column_int(statement, column++);
         }
-        for (int32_t good = CC_GOOD_WEAPONS; good < CC_GOOD_COUNT; ++good) {
+        for (int32_t good = CC_GOOD_WEAPONS; good <= last_good; ++good) {
             s->production[good] = sqlite3_column_int(statement, column++);
         }
-        for (int32_t good = CC_GOOD_WEAPONS; good < CC_GOOD_COUNT; ++good) {
+        for (int32_t good = CC_GOOD_WEAPONS; good <= last_good; ++good) {
             s->consumption[good] = sqlite3_column_int(statement, column++);
         }
-        for (int32_t good = CC_GOOD_WEAPONS; good < CC_GOOD_COUNT; ++good) {
+        for (int32_t good = CC_GOOD_WEAPONS; good <= last_good; ++good) {
             s->price[good] = sqlite3_column_int(statement, column++);
         }
         s->field_yield = sqlite3_column_int(statement, column++);
@@ -2905,11 +2999,11 @@ static bool ReadMaterialEconomy(sqlite3 *database, CcSim *sim,
         (CcMoney)sqlite3_column_int64(statement, column++);
     sim->goblins.carried_treasure_id =
         (CcId)sqlite3_column_int64(statement, column++);
-    for (int32_t good = 0; good < CC_GOOD_COUNT; ++good) {
+    for (int32_t good = 0; good <= CC_GOOD_GEMS; ++good) {
         sim->goblins.carried_goods[good] =
             sqlite3_column_int(statement, column++);
     }
-    for (int32_t good = 0; good < CC_GOOD_COUNT; ++good) {
+    for (int32_t good = 0; good <= CC_GOOD_GEMS; ++good) {
         sim->goblins.lair_stock[good] =
             sqlite3_column_int(statement, column++);
     }
@@ -2925,10 +3019,11 @@ static bool ReadMaterialEconomy(sqlite3 *database, CcSim *sim,
     }
     sim->dragon.stolen_treasure_id =
         (CcId)sqlite3_column_int64(statement, 1);
-    for (int32_t good = 0; good < CC_GOOD_COUNT; ++good) {
+    for (int32_t good = 0; good <= CC_GOOD_GEMS; ++good) {
         sim->dragon.hoard_goods[good] =
             sqlite3_column_int(statement, good + 2);
     }
+    sim->dragon.hoard_goods[CC_GOOD_PAPER] = 0;
     sqlite3_finalize(statement);
 
     if (!Prepare(database, "SELECT * FROM treasure ORDER BY slot;",
@@ -3496,10 +3591,11 @@ static bool ReadLegends(sqlite3 *database, CcSim *sim,
             (CcId)sqlite3_column_int64(statement, column++);
         campaign->days_remaining = sqlite3_column_int(statement, column++);
         campaign->cooldown_days = sqlite3_column_int(statement, column++);
-        for (int32_t good = 0; good < CC_GOOD_COUNT; ++good) {
+        for (int32_t good = 0; good <= CC_GOOD_GEMS; ++good) {
             campaign->supplies[good] =
                 sqlite3_column_int(statement, column++);
         }
+        campaign->supplies[CC_GOOD_PAPER] = 0;
         campaign->recovered_coins =
             (CcMoney)sqlite3_column_int64(statement, column++);
         campaign->attempts = sqlite3_column_int(statement, column++);
@@ -4478,6 +4574,18 @@ static bool HasQuestArchitecture(const CcSim *sim)
 static void FinishLegacyRuntimeUpgrade(CcSim *sim)
 {
     if (!HasQuestArchitecture(sim)) CcSimUpgradeQuestArchitecture(sim);
+    /* Paper enters the economy at the upgrade: pre-paper saves have no
+       paper price at all. Seed the base price and an empty stock so the
+       mills must earn the archive's ink from the first week forward. */
+    for (int32_t i = 0; i < sim->settlement_count; ++i) {
+        CcSettlement *settlement = &sim->settlements[i];
+        if (settlement->price[CC_GOOD_PAPER] < 1) {
+            settlement->price[CC_GOOD_PAPER] = 9;
+        }
+        if (settlement->stock[CC_GOOD_PAPER] < 0) {
+            settlement->stock[CC_GOOD_PAPER] = 0;
+        }
+    }
     sim->schema_version = CC_SIM_SCHEMA_VERSION;
     sim->generator_version = CC_GENERATOR_VERSION;
 }

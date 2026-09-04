@@ -72,7 +72,9 @@ int main(void)
     place->stock[CC_GOOD_FOOD] = 1000;
     place->consumption[CC_GOOD_FOOD] = 5;
     CcSimAdvanceDays(&pantry, 7);
-    CC_CHECK(place->stock[CC_GOOD_FOOD] == 60);
+    /* 60 minus the Thornford refectory's 8 grain (4 scribes x 2) — the
+       scriptorium's body eats from the same settlement it stands in. */
+    CC_CHECK(place->stock[CC_GOOD_FOOD] == 52);
 
     CcSim granary;
     place = IsolatedSettlement(&granary);
@@ -80,7 +82,7 @@ int main(void)
     place->stock[CC_GOOD_FOOD] = 1000;
     place->consumption[CC_GOOD_FOOD] = 5;
     CcSimAdvanceDays(&granary, 7);
-    CC_CHECK(place->stock[CC_GOOD_FOOD] == 160);
+    CC_CHECK(place->stock[CC_GOOD_FOOD] == 152);
 
     CcSim ordinary_spoilage;
     place = IsolatedSettlement(&ordinary_spoilage);
@@ -88,7 +90,7 @@ int main(void)
     place->stock[CC_GOOD_FOOD] = 150;
     place->consumption[CC_GOOD_FOOD] = 5;
     CcSimAdvanceDays(&ordinary_spoilage, 7);
-    CC_CHECK(place->stock[CC_GOOD_FOOD] == 144);
+    CC_CHECK(place->stock[CC_GOOD_FOOD] == 136);
 
     CcSim fed;
     place = IsolatedSettlement(&fed);

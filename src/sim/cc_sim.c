@@ -647,6 +647,7 @@ const char *CcGoodName(CcGood good)
         case CC_GOOD_WEAPONS: return "Weapons";
         case CC_GOOD_GOLD: return "Raw Gold";
         case CC_GOOD_GEMS: return "Gems";
+        case CC_GOOD_PAPER: return "Paper";
         case CC_GOOD_COUNT: break;
     }
     return "Unknown";
@@ -694,6 +695,7 @@ const char *CcServiceName(CcServiceKind service)
         case CC_SERVICE_FARM: return "Farm";
         case CC_SERVICE_BLACK_MARKET: return "Black market";
         case CC_SERVICE_DUNGEON_WARD: return "Dungeon ward";
+        case CC_SERVICE_MILL: return "Mill";
         case CC_SERVICE_NONE:
         case CC_SERVICE_COUNT: break;
     }
@@ -2576,6 +2578,9 @@ static void InitKingdom(CcSim *sim, int32_t slot, const char *name,
     kingdom->color_b = blue;
     kingdom->treasury = treasury;
     kingdom->legitimacy = legitimacy;
+    kingdom->monastery_sanction = legitimacy;
+    kingdom->unsanctioned_weeks = 0;
+    kingdom->anointed = legitimacy >= 60;
 }
 
 static void InitSettlement(CcSim *sim, int32_t slot, int32_t kingdom_slot,
@@ -2618,7 +2623,8 @@ static void SeedSettlementServices(CcSettlement *settlement)
             mask |= ServiceBit(CC_SERVICE_MARKET) |
                     ServiceBit(CC_SERVICE_SMITHY) |
                     ServiceBit(CC_SERVICE_STABLE) |
-                    ServiceBit(CC_SERVICE_CARTOGRAPHER);
+                    ServiceBit(CC_SERVICE_CARTOGRAPHER) |
+                    ServiceBit(CC_SERVICE_MILL);
             break;
         case CC_SETTLEMENT_FORTRESS:
             mask |= ServiceBit(CC_SERVICE_BARRACKS) |
@@ -2643,6 +2649,7 @@ static void SeedSettlementServices(CcSettlement *settlement)
                     ServiceBit(CC_SERVICE_BARRACKS) |
                     ServiceBit(CC_SERVICE_CARTOGRAPHER) |
                     ServiceBit(CC_SERVICE_GUILDHALL) |
+                    ServiceBit(CC_SERVICE_MILL) |
                     ServiceBit(CC_SERVICE_FARM);
             break;
         case CC_SETTLEMENT_DUNGEON_TOWN:
@@ -2789,6 +2796,9 @@ static void ConfigureSettlementEconomies(CcSim *sim)
     market->reserve_target[CC_GOOD_TOOLS] = 12;
     market->production[CC_GOOD_TOOLS] = 4;
     market->production[CC_GOOD_WEAPONS] = 2;
+    market->production[CC_GOOD_PAPER] = 3;
+    market->stock[CC_GOOD_PAPER] = 6;
+    market->reserve_target[CC_GOOD_PAPER] = 4;
     market->consumption[CC_GOOD_FOOD] = 7;
     market->consumption[CC_GOOD_MATERIAL] = 3;
 
@@ -2834,6 +2844,9 @@ static void ConfigureSettlementEconomies(CcSim *sim)
     capital->field_yield = 90;
     capital->production[CC_GOOD_TOOLS] = 5;
     capital->production[CC_GOOD_WEAPONS] = 2;
+    capital->production[CC_GOOD_PAPER] = 4;
+    capital->stock[CC_GOOD_PAPER] = 10;
+    capital->reserve_target[CC_GOOD_PAPER] = 6;
     capital->stock[CC_GOOD_GOLD] = 1;
     capital->stock[CC_GOOD_GEMS] = 1;
     capital->consumption[CC_GOOD_FOOD] = 8;
@@ -3089,6 +3102,7 @@ static int32_t BasePrice(CcGood good)
         case CC_GOOD_WEAPONS: return 24;
         case CC_GOOD_GOLD: return 40;
         case CC_GOOD_GEMS: return 70;
+        case CC_GOOD_PAPER: return 9;
         case CC_GOOD_COUNT: break;
     }
     return 1;
@@ -3168,6 +3182,18 @@ static int32_t EffectiveProduction(const CcSim *sim,
             }
         }
         production = MinimumI32(production, settlement->iron_deposit);
+    }
+    if (good == CC_GOOD_PAPER) {
+        /* Mills grind grain-straw rag feed into paper: yield scales with the
+           settlement's food surplus and fails without tools to keep the
+           machinery running. Geography: only mill towns make paper. */
+        if (!CcSettlementHasService(settlement, CC_SERVICE_MILL)) return 0;
+        if (settlement->stock[CC_GOOD_TOOLS] <= 0) return 0;
+        int32_t food_surplus = settlement->production[CC_GOOD_FOOD] -
+            settlement->consumption[CC_GOOD_FOOD];
+        if (food_surplus <= 0) return 0;
+        int32_t mill_yield = production > 0 ? production : 2;
+        return MaximumI32(0, mill_yield * food_surplus / 40);
     }
     if (good >= CC_GOOD_TOOLS) return 0;
     return MaximumI32(0, production);
@@ -3685,21 +3711,43 @@ static bool EventWasArchived(const CcSim *sim, CcId event_id)
 
 /* Archive law: the scriptorium records notable events as durable lore.
    Funding follows the monastery reserve; unfunded lore decays.
-   This is the world's memory of itself - without it, the ledger
-   is a drawer no one opens. */
+   The scriptorium is also a BODY in the material economy: scribes eat
+   grain, write on paper from the mills, and wear out their kits. Memory
+   has a supply chain — a famine or a closed mill silences the archive
+   before the treasury ever runs dry. */
 static void AdvanceArchives(CcSim *sim)
 {
     if (sim == NULL || sim->current_day % 7 != 0) return;
     CcArchives *archives = &sim->archives;
 
-    /* Funding: the monastery hires scribes when it can pay them. */
+    /* The monastery stands at the capital: grain for the refectory, paper
+       from the mill, tools from the smithy. Material want silences scribes
+       regardless of crowns. */
+    CcSettlement *home = &sim->settlements[0];
+    CcSettlement *mill = &sim->settlements[4]; /* capital: the abbey's paper */
+    bool refectory_fed = home->stock[CC_GOOD_FOOD] >= 2 * CC_MAX_SCRIBES;
+    bool paper_supply = mill->stock[CC_GOOD_PAPER] > 0;
+    bool kit_serviced = mill->stock[CC_GOOD_TOOLS] > 0;
+
+    /* Funding: the monastery hires scribes when it can pay AND feed them. */
     int32_t target_scribes = sim->iron_ledger_reserve >= 300 ? CC_MAX_SCRIBES :
         sim->iron_ledger_reserve >= 150 ? 2 :
         sim->iron_ledger_reserve >= 50 ? 1 : 0;
+    if (!refectory_fed) target_scribes = 0;
     if (target_scribes > archives->scribes) {
         archives->scribes = target_scribes;
     } else if (target_scribes < archives->scribes) {
         archives->scribes -= 1; /* scribes leave gradually, not all at once */
+    }
+    if (refectory_fed && archives->scribes > 0) {
+        /* The refectory eats: each scribe takes 2 grain a week. */
+        int32_t eaten = MinimumI32(home->stock[CC_GOOD_FOOD],
+                                   2 * archives->scribes);
+        home->stock[CC_GOOD_FOOD] -= eaten;
+        (void)PushEvent(sim, CC_EVENT_KINGDOM_ACTION, home->id, home->id,
+                        0U, eaten,
+                        "Grain carts roll to the monastery refectory; the "
+                        "scribes eat what the fields gave.");
     }
 
     /* Record: each scribe preserves one notable recent event per week.
@@ -3736,6 +3784,19 @@ static void AdvanceArchives(CcSim *sim)
         recorded += 1;
     }
     for (int32_t i = 0; i < recorded; ++i) {
+        /* A page needs paper and a working kit. No paper, no tome: the
+           event passes unrecorded into decay. The mill is the archive's
+           artery — this is the physical-memory law biting. */
+        if (!paper_supply || !kit_serviced) break;
+        CcSettlement *supply = &sim->settlements[0];
+        mill->stock[CC_GOOD_PAPER] -= 1;      /* one tome: sheets spent */
+        /* Kit wear: the scriptorium's own knives, pens, and press. Eight
+           record-weeks consume one tool from the capital's smithy stock. */
+        archives->kit_wear += 1;
+        if (archives->kit_wear >= 8 && supply->stock[CC_GOOD_TOOLS] > 0) {
+            supply->stock[CC_GOOD_TOOLS] -= 1;
+            archives->kit_wear = 0;
+        }
         archives->lore_stored += 1;
         archives->last_recorded_day = sim->current_day;
         (void)PushEvent(sim, CC_EVENT_LORE_RECORDED, noted[i],
@@ -3850,6 +3911,54 @@ static void AdvanceArchives(CcSim *sim)
             kingdom->legitimacy += 1;
         } else if (kingdom->legitimacy > target) {
             kingdom->legitimacy -= 1;
+        }
+    }
+
+    /* Coronation law: the monastery does not merely raise a trust ceiling —
+       it says WHO the true king is. Sanction flows from the same body as
+       the lore: fed, papered scribes anoint; a silent scriptorium leaves
+       crowns naked before pretenders. The chain runs wheat → monks →
+       sanction → thrones. */
+    for (int32_t i = 0; i < sim->kingdom_count; ++i) {
+        CcKingdom *kingdom = &sim->kingdoms[i];
+        int32_t sanction_target = archives->scribes > 0 && paper_supply &&
+                                  refectory_fed ?
+            archives->lore_ceiling : lore_floor / 2;
+        if (kingdom->monastery_sanction < sanction_target) {
+            kingdom->monastery_sanction += 1;
+        } else if (kingdom->monastery_sanction > sanction_target) {
+            kingdom->monastery_sanction -= 1;
+        }
+        bool was_anointed = kingdom->anointed;
+        if (kingdom->monastery_sanction >= 60 && archives->scribes > 0) {
+            kingdom->anointed = true;
+            kingdom->unsanctioned_weeks = 0;
+            if (!was_anointed) {
+                char text[CC_EVENT_TEXT_CAPACITY];
+                (void)snprintf(text, sizeof(text),
+                               "The monastery anoints %.40s: abbot and "
+                               "scribes proclaim the true king before the "
+                               "relic shrine.", kingdom->name);
+                (void)PushEvent(sim, CC_EVENT_KINGDOM_ACTION, kingdom->id,
+                                kingdom->id, 0U, kingdom->monastery_sanction,
+                                text);
+            }
+        } else if (kingdom->monastery_sanction < 40) {
+            kingdom->anointed = false;
+            kingdom->unsanctioned_weeks += 1;
+            /* A crown the abbey will not bless invites challengers: a year
+               of silence and the pretenders move. */
+            if (kingdom->unsanctioned_weeks >= 52) {
+                kingdom->unsanctioned_weeks = 0;
+                kingdom->legitimacy = MaximumI32(0, kingdom->legitimacy - 15);
+                char text[CC_EVENT_TEXT_CAPACITY];
+                (void)snprintf(text, sizeof(text),
+                               "No abbot has blessed %.40s for a year; "
+                               "a rival claimant rises and the court "
+                               "splinters.", kingdom->name);
+                (void)PushEvent(sim, CC_EVENT_KINGDOM_ACTION, kingdom->id,
+                                kingdom->id, 0U, 15, text);
+            }
         }
     }
 

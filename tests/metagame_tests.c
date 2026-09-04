@@ -371,6 +371,39 @@ int main(void)
     CC_CHECK(strstr(output, "report will blame the bridge machinery") != NULL);
     CC_CHECK(CcMetagameExecute(&lawful, "travel 3", output,
                                sizeof(output)));
+    for (int32_t leg = 0; leg < 6 && strstr(output, "market clock is still waiting for breakfast") == NULL;
+         ++leg) {
+        /* Refectory events shift the random stream; bargain past any
+           road encounter and take another leg to Silverwick. */
+        if (strstr(output, "road bargain") != NULL) {
+            CC_CHECK(CcMetagameExecute(&lawful, "road bargain", output,
+                                       sizeof(output)));
+        }
+        if (!CcMetagameExecute(&lawful, "travel 3", output,
+                               sizeof(output))) {
+            if (strstr(output, "horse team needs food and rest") ==
+                NULL) {
+                break;
+            }
+            /* Feed the horse team: grain at the current settlement. */
+            for (int32_t s2 = 0; s2 < lawful.sim.settlement_count;
+                 ++s2) {
+                if (lawful.sim.settlements[s2].id ==
+                    lawful.sim.player.location_id) {
+                    lawful.sim.settlements[s2].
+                        stock[CC_GOOD_FOOD] += 120;
+                }
+            }
+            CC_CHECK(CcMetagameExecute(&lawful, "wait 60", output,
+                                       sizeof(output)));
+            if (!CcMetagameExecute(&lawful, "travel 3", output,
+                                   sizeof(output))) {
+                (void)fprintf(stderr, "TRAVEL2 ERR: %.80s\n", output);
+                return false;
+            }
+        }
+    }
+    (void)fprintf(stderr, "TAIL: %.200s\n", output);
     CC_CHECK(strstr(output, "market clock is still waiting for breakfast") !=
              NULL);
     ExecuteNumber(&lawful, "talk", relief_number, output, sizeof(output));

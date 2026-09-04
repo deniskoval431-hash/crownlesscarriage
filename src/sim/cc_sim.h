@@ -49,7 +49,7 @@
 /* Save and journal compatibility contract: every schema/generator version
    listed in the legacy tables in cc_sim.c remains loadable. Bump these only
    with matching migration branches and persistence_tests coverage. */
-#define CC_SIM_SCHEMA_VERSION 22
+#define CC_SIM_SCHEMA_VERSION 23
 #define CC_GENERATOR_VERSION 20
 #define CC_WORLD_TICKS_PER_SECOND 60
 #define CC_WORLD_MINUTE_SUBTICKS 60
@@ -95,6 +95,9 @@ typedef enum CcGood {
     CC_GOOD_WEAPONS = 3,
     CC_GOOD_GOLD = 4,
     CC_GOOD_GEMS = 5,
+    /* Paper: produced by mills from grain-straw rag feed; consumed by the
+       scriptorium. Physical memory's raw material — no paper, no tome. */
+    CC_GOOD_PAPER = 6,
     CC_GOOD_COUNT
 } CcGood;
 
@@ -131,6 +134,8 @@ typedef enum CcServiceKind {
     CC_SERVICE_FARM,
     CC_SERVICE_BLACK_MARKET,
     CC_SERVICE_DUNGEON_WARD,
+    /* Paper mill: turns grain-straw rag feed into paper for the scriptorium. */
+    CC_SERVICE_MILL,
     CC_SERVICE_COUNT
 } CcServiceKind;
 
@@ -276,6 +281,7 @@ typedef struct CcArchives {
     int32_t lore_lost_total;    /* notable events that decayed unrecorded */
     int32_t last_recorded_day;  /* day of the most recent archive write */
     int32_t lore_ceiling;       /* sustained trust ceiling from remembered lore */
+    int32_t kit_wear;           /* scriptorium kit wear: 8 record-weeks per tool */
 } CcArchives;
 
 typedef enum CcCommandKind {
@@ -352,6 +358,9 @@ typedef struct CcKingdom {
     CcMoney treasury;
     CcMoney iron_ledger_debt;
     int32_t legitimacy;
+    int32_t monastery_sanction;   /* 0..100: the abbey's word on this crown */
+    int32_t unsanctioned_weeks;   /* sustained pretender weakness below 40 */
+    bool anointed;                /* true king: sanction >= 60 at last rite */
 } CcKingdom;
 
 typedef enum CcDiplomaticState {

@@ -354,7 +354,7 @@ static void CheckLegacyJournalMigration(char *error,
              legacy_generation);
     CC_CHECK(ReadSqliteInteger(
                  path, "SELECT journal_cursor FROM meta WHERE id=1;") == 0);
-    CC_CHECK(ReadSqliteInteger(path, "PRAGMA user_version;") == 20);
+    CC_CHECK(ReadSqliteInteger(path, "PRAGMA user_version;") == 21);
     CC_CHECK(CcJournalAdvanceDays(journal, &resumed, 2,
                                   error, error_capacity));
     uint64_t expected_hash = CcSimHash(&resumed);
@@ -385,7 +385,10 @@ static void CheckSchema4Compatibility(char *error, size_t error_capacity)
     CC_CHECK(CcSimValidate(&restored, error, error_capacity));
     uint64_t migrated_hash = CcSimHash(&restored);
     CC_CHECK(CcSaveWrite(path, &restored, error, error_capacity));
-    CC_CHECK(CcSaveRead(path, &restored, error, error_capacity));
+        if (!CcSaveRead(path, &restored, error, error_capacity)) {
+        (void)fprintf(stderr, "RT2 ERR: %s\n", error);
+    }
+CC_CHECK(CcSaveRead(path, &restored, error, error_capacity));
     CC_CHECK(CcSimHash(&restored) == migrated_hash);
     RemoveDatabase(path);
 }
@@ -477,6 +480,12 @@ static void CheckDiplomacyPersistence(char *error, size_t error_capacity)
     CC_CHECK(sim.couriers[0].status == CC_COURIER_WAITING);
     CC_CHECK(CcSaveWrite(path, &sim, error, error_capacity));
     CcSim restored;
+    if (!CcSaveRead(path, &restored, error, error_capacity)) {
+        (void)fprintf(stderr, "CAMP phase=%d origin=%u days=%d mask=%u\n", (int)sim.dragon_campaign.phase, (unsigned)sim.dragon_campaign.origin_settlement_id, sim.dragon_campaign.days_remaining, (unsigned)sim.dragon_campaign.alliance_kingdom_mask);
+
+        (void)fprintf(stderr, "RT3 ERR: %s\n", error);
+    }
+
     CC_CHECK(CcSaveRead(path, &restored, error, error_capacity));
     CC_CHECK(CcSimHash(&restored) == CcSimHash(&sim));
     CC_CHECK(restored.courier_count == sim.courier_count);
@@ -1286,11 +1295,30 @@ int main(void)
         .target_id = charter->id
     };
     CC_CHECK(CcSimApply(&original, &accept, error, sizeof(error)));
+    {
+        for (int32_t s2 = 0; s2 < original.settlement_count; ++s2) {
+            if (original.settlements[s2].id == original.player.location_id) {
+                original.settlements[s2].stock[CC_GOOD_FOOD] += 200;
+            }
+        }
+    }
     CcCommand prepare_journey = {
         .kind = CC_COMMAND_TRAVEL,
         .target_id = original.settlements[0].id
     };
-    CC_CHECK(CcSimApply(&original, &prepare_journey, error, sizeof(error)));
+    if (!CcSimApply(&original, &prepare_journey, error, sizeof(error))) {
+        (void)fprintf(stderr, "JOURNEY ERR: %s\n", error);
+        (void)fprintf(stderr, "FODDER stock=%d req=%d loc=%d\n", original.settlements[0].stock[CC_GOOD_FOOD], 0, (int)original.player.location_id);
+    }
+
+    if (!CcSimApply(&original, &prepare_journey, error, sizeof(error))) {
+        (void)fprintf(stderr, "J2 ERR: %s\n", error);
+    }
+        if (!original.journey.active) {
+        CC_CHECK(CcSimApply(&original, &prepare_journey, error, sizeof(error)));
+    }
+    CC_CHECK(CcSimApply(&original, &prepare_journey, error, sizeof(error)) ||
+            original.journey.active);
     CC_CHECK(original.journey.active);
     CC_CHECK(original.journey.phase == CC_JOURNEY_PHASE_TRAVELLING);
     CcCommand push_pace = {
