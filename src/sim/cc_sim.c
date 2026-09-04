@@ -3807,8 +3807,14 @@ static void AdvanceArchives(CcSim *sim)
                 codex->location_id = oldest_location;
                 codex->gold_content = 1;
                 codex->gem_content = 1;
-                codex->craft_work = combined_lore;
-                codex->appraised_value = 6 + combined_lore;
+                /* Lore can exceed the unit cap over millennia. The codex holds
+                   what a single artifact may carry; the rest is recorded as
+                   lost to binding — knowledge compressed past recovery. */
+                codex->craft_work = combined_lore > CC_SIM_MAX_UNITS
+                                        ? CC_SIM_MAX_UNITS : combined_lore;
+                codex->appraised_value = codex->craft_work + 6 > CC_SIM_MAX_UNITS
+                                             ? CC_SIM_MAX_UNITS
+                                             : codex->craft_work + 6;
                 codex->created_day = sim->current_day;
                 char text[CC_EVENT_TEXT_CAPACITY];
                 (void)snprintf(text, sizeof(text),
